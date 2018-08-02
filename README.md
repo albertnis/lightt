@@ -38,6 +38,10 @@ The AVR ISP programmer works well.
 
 I use [Mosquitto][mosquitto] on a Raspberry Pi 2B. 
 
+## MQTT message format
+
+**Command**: Lightt expects a string consisting of several groups, where each group is a character followed by three numbers. `hello`
+
 ## Configuring Home Assistant
 
 Home Assistant is my Home Automation software of choice. These lights are `mqtt_template` type lights because this enables transition support.

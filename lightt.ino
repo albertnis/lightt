@@ -18,9 +18,9 @@
 
 // MQTT settings
 // CHANGE THESE TO SUIT YOUR DEVICE!
-#define client_name "deskback"
-#define command_topic "tenbar/abedroom/deskback/command"
-#define state_topic "tenbar/abedroom/deskback/state"
+#define client_name "desktop"
+#define command_topic "tenbar/abedroom/desktop/command"
+#define state_topic "tenbar/abedroom/desktop/state"
 
 // Receive and send white channel over the network
 #define feature_white true
@@ -42,6 +42,11 @@ const uint8_t dimming_curve[256] = { 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0
 0xc4, 0xc5, 0xc7, 0xc8, 0xca, 0xcc, 0xcd, 0xcf, 0xd1, 0xd3, 0xd4, 0xd6, 0xd8, 0xd9, 0xdb, 0xdd, 0xdf,
 0xe0, 0xe2, 0xe4, 0xe6, 0xe7, 0xe9, 0xeb, 0xed, 0xee, 0xf0, 0xf2, 0xf4, 0xf6, 0xf8, 0xf9, 0xfb, 0xfd,
 0xff};
+
+// White bias (based on 3000K warm white LED)
+const float white_r = 1.0;
+const float white_g = 0.796408;
+const float white_b = 0.546234;
 
 // Crossfade setup
 const unsigned long int crossfade_duration_default = 180;
@@ -78,10 +83,12 @@ NeoPixelBus<NeoGrbwFeature, NeoEsp8266Uart800KbpsMethod> strip_bus(PixelCount);
 
 // LED state, as sent and received over MQTT
 bool switch_state = 0;
+bool white_mode = 0;
 uint8_t red_val = 255;
 uint8_t green_val = 255;
 uint8_t blue_val = 255;
 uint8_t white_val = 255;
+uint16_t coltemp_val = 333;
 uint8_t brightness = 255;
 
 // What are we transitioning to?
@@ -123,6 +130,23 @@ void clean_cols() {
   }
 }
 
+void set_coltemp_val() {
+  // TODO: make graph and get discontinuity point
+  if (coltemp_val <= 200) {
+    red_val = 255 - 1.148 * (200 - coltemp_val);
+    green_val = 255 - 0.628 * (200 - coltemp_val);
+    blue_val = 255;
+  } else if (coltemp_val > 200 && coltemp_val <= 333) {
+    red_val = 255;
+    green_val = 255 - 0.39 * (coltemp_val - 200);
+    blue_val = 255 - 0.87 * (coltemp_val - 200);
+  } else {
+    red_val = 255;
+    green_val = 203 - 0.3 * (coltemp_val - 333);
+    blue_val = 139 - 0.54 * (coltemp_val - 333);
+  }
+}
+
 // Start transition
 void update_target() {
   red_val_from = red_val_now;
@@ -134,6 +158,9 @@ void update_target() {
   Serial.println(red_val_from);
 
   clean_cols();
+  if (white_mode) {
+    set_coltemp_val();
+  }
 
   float brightness_f = (float)switch_state * (float)brightness/255.0;
   Serial.print("brightness_f is ");
@@ -153,7 +180,7 @@ void update_target() {
 
 // Handle MQTT packet
 // If the server is setup correctly this will look
-// something like s001l255r240g005b140w180t0001
+// something like s001l255r240g005b140k380t0001
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
@@ -164,6 +191,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println();
 
   bool crossfade_duration_updated = false;
+  bool temp_updated = false;
 
   // Interpret the contents by checking each flag
   for (int i=0;i < length;i++) {
@@ -193,15 +221,18 @@ void callback(char* topic, byte* payload, unsigned int length) {
       blue_val = rip_int(payload, i);
       Serial.print("| Blue to ");
       Serial.println(blue_val);
-    } else if (feature_white && (code_letter == 'w')) {
+    } else if (feature_white && (code_letter == 'k')) {
       // White command
-      white_val = rip_int(payload, i);
-      Serial.print("| White to ");
-      Serial.println(white_val);
+      temp_updated = true;
+      white_val = 255;
+      coltemp_val = rip_int(payload, i);
+      Serial.print("| Temp to ");
+      Serial.println(coltemp_val);
     } else if (code_letter == 't') {
       // Transition command
       crossfade_duration_updated = true;
       crossfade_duration = rip_int(payload, i, 4) * 1000;
+      crossfade_duration = (crossfade_duration == 0) ? 20 : crossfade_duration;
       Serial.print("| Transition to ");
       Serial.println(crossfade_duration);
     }
@@ -213,6 +244,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
     // it was explicitly requested
     crossfade_duration = crossfade_duration_default;
   }
+
+  white_mode = temp_updated;
 
   update_target();
   send_state();
@@ -252,7 +285,7 @@ void send_state() {
   Serial.print(state_topic);
   Serial.print("] ");
 
-  int vals[6] = {switch_state, brightness, red_val, green_val, blue_val, white_val};
+  int vals[6] = {switch_state, brightness, red_val, green_val, blue_val, coltemp_val};
   char output[] = "000,000,000,000,000,000";
 
   int valindex = 0;
@@ -318,11 +351,17 @@ void mqttConnect() {
   }
 }
 
+// An intermediate function to alter our colour destination
+void rgb_preprocess() {
+
+}
+
 // Crossfade magic
 // Get the instantaneous colour state at the current time
 void rgb_interpolate() {
-  if ((millis() - t_last_light_update) <= crossfade_duration) {
+  if (((millis() - t_last_light_update) <= crossfade_duration) && (crossfade_duration > 5)) {
     // Not at target yet -> We're transitioning so do math
+    Serial.print(crossfade_duration);
     red_val_now = map(millis() - t_last_light_update, 0, crossfade_duration, red_val_from, red_val_target);
     green_val_now = map(millis() - t_last_light_update, 0, crossfade_duration, green_val_from, green_val_target);
     blue_val_now = map(millis() - t_last_light_update, 0, crossfade_duration, blue_val_from, blue_val_target);
@@ -335,17 +374,41 @@ void rgb_interpolate() {
     white_val_now = white_val_target;
 
     // Reset crossfade duration now we're done
-    crossfade_duration = crossfade_duration_default;
+    // crossfade_duration = crossfade_duration_default;
   }
 }
 
 // An intermediate function to map our colour to actual output variables
 // This is where non-colour things like dimming curves or strobing should happen
 void rgb_postprocess() {
-  red_val_out = dimming_curve[red_val_now];
-  green_val_out = dimming_curve[green_val_now];
-  blue_val_out = dimming_curve[blue_val_now];
-  white_val_out = dimming_curve[white_val_now];
+  red_val_out = red_val_now;
+  green_val_out = green_val_now;
+  blue_val_out = blue_val_now;
+  white_val_out = white_val_now;
+
+  apply_white_bias();
+  apply_dimming_curve();
+}
+
+void apply_dimming_curve() {
+  red_val_out = dimming_curve[(uint8_t)(red_val_out + white_r * white_val_out)] - dimming_curve[(uint8_t)(white_r * white_val_out)];
+  green_val_out =dimming_curve[(uint8_t)(green_val_out + white_g * white_val_out)] - dimming_curve[(uint8_t)(white_g * white_val_out)];
+  blue_val_out = dimming_curve[(uint8_t)(blue_val_out + white_b * white_val_out)] - dimming_curve[(uint8_t)(white_b * white_val_out)];
+  white_val_out = dimming_curve[white_val_out];
+}
+
+void apply_white_bias() {
+  uint16_t R = (float)red_val_out / white_r;
+  uint16_t G = (float)green_val_out / white_g;
+  uint16_t B = (float)blue_val_out / white_b;
+  uint8_t min_col = (R<G?R:G)<B?(R<G?R:G):B;
+  //Serial.print("mincol");
+  //Serial.print(min_col);
+
+  white_val_out = min_col;
+  red_val_out = red_val_out - white_r * white_val_out;
+  green_val_out = green_val_out - white_g * white_val_out;
+  blue_val_out = blue_val_out - white_b * white_val_out;
 }
 
 // Send the output colour to hardware, for realsies
@@ -358,7 +421,18 @@ void rgb_display() {
     Serial.print(green_val_now);
     Serial.print(",");
     Serial.print(blue_val_now);
-    Serial.print(")");
+    Serial.print(",");
+    Serial.print(white_val_now);
+    Serial.print(") -> ");
+    Serial.print("out(");
+    Serial.print(red_val_out);
+    Serial.print(",");
+    Serial.print(green_val_out);
+    Serial.print(",");
+    Serial.print(blue_val_out);
+    Serial.print(",");
+    Serial.print(white_val_out);
+    Serial.println(")");
   }
 
   // PWM update
