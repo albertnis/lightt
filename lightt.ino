@@ -84,6 +84,7 @@ NeoPixelBus<NeoGrbwFeature, NeoEsp8266Uart800KbpsMethod> strip_bus(PixelCount);
 // LED state, as sent and received over MQTT
 bool switch_state = 0;
 bool white_mode = 0;
+bool stream_mode = 0;
 uint8_t red_val = 255;
 uint8_t green_val = 255;
 uint8_t blue_val = 255;
@@ -157,7 +158,9 @@ void update_target() {
   Serial.print("red_val_from to ");
   Serial.println(red_val_from);
 
-  clean_cols();
+  if (!stream_mode) {
+    clean_cols();
+  }
   if (white_mode) {
     set_coltemp_val();
   }
@@ -181,6 +184,7 @@ void update_target() {
 // Handle MQTT packet
 // If the server is setup correctly this will look
 // something like s001l255r240g005b140k380t0001
+//             or    vr240g005b140t0040
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
@@ -192,6 +196,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   bool crossfade_duration_updated = false;
   bool temp_updated = false;
+  bool stream_set = false;
 
   // Interpret the contents by checking each flag
   for (int i=0;i < length;i++) {
@@ -201,6 +206,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
       switch_state = rip_int(payload, i);
       Serial.print("| State to ");
       Serial.println(switch_state);
+    } else if (code_letter == 'v') {
+      // Stream mode
+      stream_set = true;
     } else if (code_letter == 'l') {
       // Brightness (luminosity) command
       brightness = rip_int(payload, i);
@@ -229,10 +237,17 @@ void callback(char* topic, byte* payload, unsigned int length) {
       Serial.print("| Temp to ");
       Serial.println(coltemp_val);
     } else if (code_letter == 't') {
-      // Transition command
+      // Transition command (seconds)
       crossfade_duration_updated = true;
       crossfade_duration = rip_int(payload, i, 4) * 1000;
-      crossfade_duration = (crossfade_duration == 0) ? 20 : crossfade_duration;
+      crossfade_duration = (crossfade_duration == 0) ? 50 : crossfade_duration;
+      Serial.print("| Transition to ");
+      Serial.println(crossfade_duration);
+    } else if (code_letter == 'v') {
+      // Transition command (milliseconds)
+      crossfade_duration_updated = true;
+      crossfade_duration = rip_int(payload, i, 4);
+      crossfade_duration = (crossfade_duration == 0) ? 50 : crossfade_duration;
       Serial.print("| Transition to ");
       Serial.println(crossfade_duration);
     }
@@ -246,9 +261,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
 
   white_mode = temp_updated;
+  stream_mode = stream_set;
 
   update_target();
-  send_state();
+
+  if (!stream_mode) {
+    send_state();
+  }
 }
 
 // Pull out int from byte array given
