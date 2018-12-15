@@ -26,7 +26,7 @@ char mqtt_port[6] = "1883";
 char mqtt_user[20] = "";
 char mqtt_password[20] = "";
 char mqtt_clientname[20] = "lightt";
-char mqtt_topic[80] = "tenbar/abedroom/desktop";
+char mqtt_topic[80] = "";
 
 char command_topic[88];
 char state_topic[86];
@@ -361,11 +361,11 @@ void mqttConnect() {
   Serial.print(":");
   Serial.print(1883);
   Serial.print("... ");
-  client.setServer(mqtt_server, 1883);
+  client.setServer(mqtt_server, atoi(mqtt_port));
   client.setCallback(callback);
   // Check the PubSubClient.connect docs to see
   // how to use username/password auth for connection
-  if (client.connect(mqtt_clientname, NULL, NULL, availability_topic, 0, 1, "offline")) {
+  if (client.connect(mqtt_clientname, mqtt_user, mqtt_password, availability_topic, 0, 1, "offline")) {
     mqttSetup();
     Serial.println("connected");
   } else {
