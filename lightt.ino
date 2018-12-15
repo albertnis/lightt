@@ -20,7 +20,7 @@
 // MQTT credentials, as defined in credentials.h
 // Feel free to remove credentials.h and just put them here directly.
 bool shouldSaveConfig = false;
-char mqtt_server[40] = "192.168.1.101";
+char mqtt_server[40] = "";
 char mqtt_port[6] = "1883";
 char mqtt_user[20] = "";
 char mqtt_password[20] = "";
@@ -408,7 +408,9 @@ void rgb_postprocess() {
   blue_val_out = blue_val_now;
   white_val_out = white_val_now;
 
-  apply_white_bias();
+  if (feature_white) {
+    apply_white_bias();
+  }
   apply_dimming_curve();
 }
 
@@ -480,7 +482,6 @@ void updateTopics() {
 }
 
 void setup() {
-  delay(1000);
   // PWM setup
   analogWriteFreq(pwm_freq);
   analogWriteRange(255);
