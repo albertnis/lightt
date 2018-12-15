@@ -1,26 +1,30 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <NeoPixelBus.h>
+#include <WiFiManager.h>
+#include <EEPROM.h>
 #include "credentials.h"
 
 #define pwm_freq 1024
 
 // WiFi credentials, as defined in credentials.h.
 // Feel free to remove credentials.h and just put them here directly.
-#define wifi_ssid WIFI_SSID
-#define wifi_password WIFI_PASSWORD
+// #define wifi_ssid WIFI_SSID
+// #define wifi_password WIFI_PASSWORD
 
 // MQTT credentials, as defined in credentials.h
 // Feel free to remove credentials.h and just put them here directly.
 #define mqtt_server "192.168.1.101"
-#define mqtt_user MQTT_USER
-#define mqtt_password MQTT_PASSWORD
+#define mqtt_port "1883"
+#define mqtt_user ""
+#define mqtt_password ""
 
 // MQTT settings
 // CHANGE THESE TO SUIT YOUR DEVICE!
 #define client_name "desktop"
 #define command_topic "tenbar/abedroom/desktop/command"
 #define state_topic "tenbar/abedroom/desktop/state"
+#define availability_topic "tenbar/abedroom/desktop/availability"
 
 // Receive and send white channel over the network
 #define feature_white true
@@ -58,6 +62,12 @@ unsigned long int t_initialised = 0;
 unsigned long int t_last_wifi_reconnect_attempt = 0;
 unsigned long int t_last_mqtt_reconnect_attempt = 0;
 unsigned long int t_last_logged = 0;
+
+WiFiManager wifiManager;
+WiFiManagerParameter custom_mqtt_server("server", "MQTT server", mqtt_server, 40);
+WiFiManagerParameter custom_mqtt_port("port", "MQTT port", mqtt_port, 6);
+WiFiManagerParameter custom_mqtt_user("user", "MQTT user", mqtt_user, 20);
+WiFiManagerParameter custom_mqtt_pass("password", "MQTT password", mqtt_password, 20);
 
 // WiFi client setup
 WiFiClient espClient;
@@ -333,37 +343,31 @@ void send_state() {
   t_last_sent = millis();
 }
 
-// Attempt once to connect to WiFi
-void wifiConnect() {
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(wifi_ssid);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(wifi_ssid, wifi_password);
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
 // Subscribe to MQTT commands for this device
 void mqttSetup() {
   client.subscribe(command_topic, 1);
+
+  if (client.publish(availability_topic, "online", true)) {
+    Serial.println("Registered availability");
+  } else {
+    Serial.println("Failure");
+  }
 }
 
 // Attempt once to connect to the MQTT broker
 void mqttConnect() {
-  Serial.print("Attempting MQTT connection...");
+  Serial.print("Attempting MQTT connection to  ");
+  Serial.print(mqtt_server);
+  Serial.print(":");
+  Serial.print(1883);
+  Serial.print("... ");
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
   // Check the PubSubClient.connect docs to see
   // how to use username/password auth for connection
-  if (client.connect(client_name)) {
+  if (client.connect(client_name, NULL, NULL, availability_topic, 0, 1, "offline")) {
     mqttSetup();
     Serial.println("connected");
-    send_state();
   } else {
     Serial.print("failed, rc=");
     Serial.println(client.state());
@@ -491,20 +495,24 @@ void setup() {
 
   t_initialised = millis();
   t_last_sent = t_initialised;
+
+  wifiManager.autoConnect("Lightt");
+
+  wifiManager.addParameter(&custom_mqtt_server);
+  wifiManager.addParameter(&custom_mqtt_port);
+  wifiManager.addParameter(&custom_mqtt_user);
+  wifiManager.addParameter(&custom_mqtt_pass);
+
+  strcpy(mqtt_server, custom_mqtt_server.getValue());
+  strcpy(mqtt_port, custom_mqtt_port.getValue());
+  strcpy(mqtt_user, custom_mqtt_user.getValue());
+  strcpy(mqtt_password, custom_mqtt_pass.getValue());
+
+  wifiManager.setConfigPortalTimeout(60);
+  wifiManager.startConfigPortal();
 }
 
 void loop() {
-  // Are we connected to WiFi?
-  if (WiFi.status() != WL_CONNECTED) {
-    unsigned long now = millis();
-
-    // If not, we should try to connect at boot then every 10 seconds
-    if (now - t_last_wifi_reconnect_attempt > 10000UL || t_last_wifi_reconnect_attempt == 0) {
-      t_last_wifi_reconnect_attempt = now;
-      wifiConnect();
-    }
-  }
-
   // Are we conencted to MQTT broker?
   if (!client.connected()) {
     unsigned long now = millis();
