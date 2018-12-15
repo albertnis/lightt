@@ -6,7 +6,6 @@
 #include <WiFiManager.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
-#include "credentials.h"
 
 #define pwm_freq 1024
 

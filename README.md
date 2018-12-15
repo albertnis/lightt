@@ -14,7 +14,6 @@
 
 ## Getting started
 
-1. Copy `credentials_template.h` to `credentials.h` and fill in your WiFi credentials. If you're using MQTT credentials, fill those in also.
 1. In `lightt.ino`, set `feature_white` to your desired value depending on whether you want white channel handling.
 1. Flash the board and connect a device to the resulting AP for configuring WiFi and MQTT settings [as below](#configuring).
 1. For further configuration options, check out WS2812B setup variables and MQTT connection function. By default, the strip is set to GRBW (try GRB for strips with no white channel) and no MQTT credentials are used.
