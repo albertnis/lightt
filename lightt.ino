@@ -1,33 +1,36 @@
+#include <FS.h>
+
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <NeoPixelBus.h>
 #include <WiFiManager.h>
+#include <ArduinoJson.h>
 #include <EEPROM.h>
 #include "credentials.h"
 
 #define pwm_freq 1024
 
-// WiFi credentials, as defined in credentials.h.
-// Feel free to remove credentials.h and just put them here directly.
-// #define wifi_ssid WIFI_SSID
-// #define wifi_password WIFI_PASSWORD
-
-// MQTT credentials, as defined in credentials.h
-// Feel free to remove credentials.h and just put them here directly.
-#define mqtt_server "192.168.1.101"
-#define mqtt_port "1883"
-#define mqtt_user ""
-#define mqtt_password ""
-
 // MQTT settings
-// CHANGE THESE TO SUIT YOUR DEVICE!
-#define client_name "desktop"
-#define command_topic "tenbar/abedroom/desktop/command"
-#define state_topic "tenbar/abedroom/desktop/state"
-#define availability_topic "tenbar/abedroom/desktop/availability"
+#define command_suffix "/command"
+#define state_suffix "/state"
+#define availability_suffix "/availability"
 
 // Receive and send white channel over the network
 #define feature_white true
+
+// MQTT credentials, as defined in credentials.h
+// Feel free to remove credentials.h and just put them here directly.
+bool shouldSaveConfig = false;
+char mqtt_server[40] = "192.168.1.101";
+char mqtt_port[6] = "1883";
+char mqtt_user[20] = "";
+char mqtt_password[20] = "";
+char mqtt_clientname[20] = "lightt";
+char mqtt_topic[80] = "tenbar/abedroom/desktop";
+
+char command_topic[88];
+char state_topic[86];
+char availability_topic[93];
 
 // Generated using curve_generator.py
 const uint8_t dimming_curve[256] = { 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02, 0x02, 0x03, 0x03, 0x03,
@@ -64,16 +67,10 @@ unsigned long int t_last_mqtt_reconnect_attempt = 0;
 unsigned long int t_last_logged = 0;
 
 WiFiManager wifiManager;
-WiFiManagerParameter custom_mqtt_server("server", "MQTT server", mqtt_server, 40);
-WiFiManagerParameter custom_mqtt_port("port", "MQTT port", mqtt_port, 6);
-WiFiManagerParameter custom_mqtt_user("user", "MQTT user", mqtt_user, 20);
-WiFiManagerParameter custom_mqtt_pass("password", "MQTT password", mqtt_password, 20);
 
 // WiFi client setup
 WiFiClient espClient;
 PubSubClient client(espClient);
-unsigned long int t_last_sent = 0;
-const unsigned int state_period = 5000;
 
 // Setup for PWM strip
 // Pins as per ElectroDragon LED board docs
@@ -339,8 +336,11 @@ void send_state() {
   } else {
     Serial.println(" Failure");
   }
+}
 
-  t_last_sent = millis();
+void saveConfigCallback () {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
 }
 
 // Subscribe to MQTT commands for this device
@@ -365,7 +365,7 @@ void mqttConnect() {
   client.setCallback(callback);
   // Check the PubSubClient.connect docs to see
   // how to use username/password auth for connection
-  if (client.connect(client_name, NULL, NULL, availability_topic, 0, 1, "offline")) {
+  if (client.connect(mqtt_clientname, NULL, NULL, availability_topic, 0, 1, "offline")) {
     mqttSetup();
     Serial.println("connected");
   } else {
@@ -471,7 +471,17 @@ void rgb_display() {
   }
 }
 
+void updateTopics() {
+  strcpy(command_topic, mqtt_topic);
+  strcat(command_topic, command_suffix);
+  strcpy(state_topic, mqtt_topic);
+  strcat(state_topic, state_suffix);
+  strcpy(availability_topic, mqtt_topic);
+  strcat(availability_topic, availability_suffix);
+}
+
 void setup() {
+  delay(1000);
   // PWM setup
   analogWriteFreq(pwm_freq);
   analogWriteRange(255);
@@ -494,22 +504,90 @@ void setup() {
   strip_bus.Show();
 
   t_initialised = millis();
-  t_last_sent = t_initialised;
+
+  if (SPIFFS.begin()) {
+    Serial.println("mounted file system");
+    if (SPIFFS.exists("/config.json")) {
+      //file exists, reading and loading
+      Serial.println("reading config file");
+      File configFile = SPIFFS.open("/config.json", "r");
+      if (configFile) {
+        Serial.println("opened config file");
+        size_t size = configFile.size();
+        // Allocate a buffer to store contents of the file.
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        configFile.readBytes(buf.get(), size);
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& json = jsonBuffer.parseObject(buf.get());
+        json.printTo(Serial);
+        if (json.success()) {
+          Serial.println("\nparsed json");
+          strcpy(mqtt_server, json["mqtt_server"]);
+          strcpy(mqtt_port, json["mqtt_port"]);
+          strcpy(mqtt_user, json["mqtt_user"]);
+          strcpy(mqtt_password, json["mqtt_password"]);
+          strcpy(mqtt_clientname, json["mqtt_clientname"]);
+          strcpy(mqtt_topic, json["mqtt_topic"]);
+        } else {
+          Serial.println("failed to load json config");
+        }
+      }
+    }
+  } else {
+    Serial.println("failed to mount FS");
+  }
 
   wifiManager.autoConnect("Lightt");
+  
+  WiFiManagerParameter custom_mqtt_server("server", "MQTT server", mqtt_server, 40);
+  WiFiManagerParameter custom_mqtt_port("port", "MQTT port", mqtt_port, 6);
+  WiFiManagerParameter custom_mqtt_user("user", "MQTT user", mqtt_user, 20);
+  WiFiManagerParameter custom_mqtt_pass("password", "MQTT password", mqtt_password, 20);
+  WiFiManagerParameter custom_mqtt_clientname("client", "MQTT client name", mqtt_clientname, 20);
+  WiFiManagerParameter custom_mqtt_topic("topic", "MQTT topic", mqtt_topic, 80);
 
   wifiManager.addParameter(&custom_mqtt_server);
   wifiManager.addParameter(&custom_mqtt_port);
   wifiManager.addParameter(&custom_mqtt_user);
   wifiManager.addParameter(&custom_mqtt_pass);
+  wifiManager.addParameter(&custom_mqtt_clientname);
+  wifiManager.addParameter(&custom_mqtt_topic);
+
+  wifiManager.setConfigPortalTimeout(60);
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+  wifiManager.startConfigPortal();
 
   strcpy(mqtt_server, custom_mqtt_server.getValue());
   strcpy(mqtt_port, custom_mqtt_port.getValue());
   strcpy(mqtt_user, custom_mqtt_user.getValue());
   strcpy(mqtt_password, custom_mqtt_pass.getValue());
+  strcpy(mqtt_clientname, custom_mqtt_clientname.getValue());
+  strcpy(mqtt_topic, custom_mqtt_topic.getValue());
 
-  wifiManager.setConfigPortalTimeout(60);
-  wifiManager.startConfigPortal();
+  if (shouldSaveConfig) {
+    Serial.println("saving config");
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.createObject();
+    json["mqtt_server"] = mqtt_server;
+    json["mqtt_port"] = mqtt_port;
+    json["mqtt_user"] = mqtt_user;
+    json["mqtt_password"] = mqtt_password;
+    json["mqtt_clientname"] = mqtt_clientname;
+    json["mqtt_topic"] = mqtt_topic;
+
+    File configFile = SPIFFS.open("/config.json", "w");
+    if (!configFile) {
+      Serial.println("failed to open config file for writing");
+    }
+
+    json.printTo(Serial);
+    json.printTo(configFile);
+    configFile.close();
+    //end save
+  }
+
+  updateTopics();
 }
 
 void loop() {
@@ -523,11 +601,6 @@ void loop() {
       mqttConnect();
     }
     return;
-  }
-
-  // Send state to the broker regularly so it knows what we're up to
-  if ((millis() - t_last_sent) > state_period) {
-    send_state();
   }
   
   // Prepare colour
