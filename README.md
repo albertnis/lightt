@@ -1,5 +1,8 @@
 # Lightt
 
+> [!IMPORTANT]
+> In the years since this repository was updated, I have moved to [WLED](https://kno.wled.ge/) and [ESPHome](https://esphome.io/) for my LED strip needs. This repo remains as an archive.
+
 *Control RGBW LEDs over MQTT using ESP8266.*
 
 ## Features
